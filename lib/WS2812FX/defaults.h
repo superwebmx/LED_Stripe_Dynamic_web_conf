@@ -1,6 +1,23 @@
 #ifndef WS2812FX_DEFAULTS_h
 #define WS2812FX_DEFAULTS_h
 
+#ifdef ESP8266
+    #ifdef ESP32
+    #error "This is wrong. Only one platform accepted"
+    #endif
+#endif
+#ifndef ESP8266
+#ifndef ESP32
+#error "Platform not supported yet"
+#endif
+#endif
+
+
+#ifdef ESP32 // no working WiFimanager yet... need to use the workaround task.
+    #define WLAN_SSID "GuestAccess"
+    #define WLAN_PASSWORD "GuestAccess"
+#endif
+
 // The delay being used for several init phases.
 #ifdef DEBUG
 #define INITDELAY 500
@@ -60,7 +77,12 @@
 #define BRIGHTNESS_MIN 0
 #define BRIGHTNESS_MAX 255
 
+#ifdef ESP8266
 #define LED_PIN 3 // Needs to be 3 (raw value) for ESP8266 because of DMA
+#endif
+#ifdef ESP32 
+#define LED_PIN 18
+#endif
 #define DEFAULT_MAX_CURRENT 2800
 #define STRIP_FPS  (1000*1000)/(30 * LED_COUNT + 50)        // Depends on LED count...
 #define STRIP_VOLTAGE 5            // fixed to 5 volts

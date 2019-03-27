@@ -36,9 +36,11 @@
 #define WS2812FX_FastLED_h
 
 /* <FastLED implementation> */
+#ifdef ESP8266
 #define FASTLED_ESP8266_RAW_PIN_ORDER
 #define FASTLED_ESP8266_DMA
 #define FASTLED_USE_PROGMEM 1
+#endif
 
 #include "defaults.h"
 
@@ -52,9 +54,13 @@
 #define STRIP_MIN_DELAY max((1000 / (_segment.fps)), ((30 * LED_COUNT + 50) / 1000))
 #define STRIP_DELAY_MICROSEC  ((uint32_t)max((1000000 / (_segment.fps)), ((30 * LED_COUNT + 50))))
 
-#define FASTLED_INTERNAL
+//#define FASTLED_INTERNAL
+#ifdef ESP8266
 #include "FastLED.h"
-FASTLED_USING_NAMESPACE
+#endif
+#ifdef ESP32
+#include <FastLED.h>
+#endif
 
 /* </FastLED implementation> */
 
@@ -396,8 +402,8 @@ public:
     _bleds = new CRGB[LED_COUNT];
     leds = new CRGB[LED_COUNT];
 
-    FastLED.addLeds<WS2812, LED_PIN, GRB>(_bleds, LED_COUNT);
-    FastLED.setCorrection(colc); //TypicalLEDStrip);
+    //FastLED.addLeds<WS2812, LED_PIN, GRB>(_bleds, LED_COUNT);
+    //FastLED.setCorrection(colc); //TypicalLEDStrip);
 
 
     _mode[FX_MODE_STATIC] = &WS2812FX::mode_static;
@@ -450,21 +456,21 @@ public:
     _mode[FX_MODE_SUNRISE] = &WS2812FX::mode_sunrise;
     _mode[FX_MODE_SUNSET] = &WS2812FX::mode_sunset;
 
-    _name[FX_MODE_STATIC] = F("Static");
-    _name[FX_MODE_EASE] = F("Ease");
-    _name[FX_MODE_TWINKLE_EASE] = F("Ease Twinkle");
-    _name[FX_MODE_BREATH] = F("Breath");
-    _name[FX_MODE_NOISEMOVER] = F("iNoise8 Mover");
-    _name[FX_MODE_TWINKLE_NOISEMOVER] = F("Twinkle iNoise8 Mover");
-    _name[FX_MODE_PLASMA] = F("Plasma Effect");
-    _name[FX_MODE_JUGGLE_PAL] = F("Juggle Moving Pixels");
-    _name[FX_MODE_FILL_BEAT] = F("Color Fill Beat");
-    _name[FX_MODE_DOT_BEAT] = F("Moving Dots");
-    _name[FX_MODE_DOT_COL_WIPE] = F("Moving Dots Color Wipe");
-    _name[FX_MODE_COLOR_WIPE_SAWTOOTH] = F("Color Wipe Sawtooth");
-    _name[FX_MODE_COLOR_WIPE_SINE] = F("Color Wipe Sine");
-    _name[FX_MODE_COLOR_WIPE_QUAD] = F("Color Wipe Quad");
-    _name[FX_MODE_COLOR_WIPE_TRIWAVE] = F("Color Wipe Triwave");
+    _name[FX_MODE_STATIC]                           = F("Static");
+    _name[FX_MODE_EASE]                             = F("Ease");
+    _name[FX_MODE_TWINKLE_EASE]                     = F("Ease Twinkle");
+    _name[FX_MODE_BREATH]                           = F("Breath");
+    _name[FX_MODE_NOISEMOVER]                       = F("iNoise8 Mover");
+    _name[FX_MODE_TWINKLE_NOISEMOVER]               = F("Twinkle iNoise8 Mover");
+    _name[FX_MODE_PLASMA]                           = F("Plasma Effect");
+    _name[FX_MODE_JUGGLE_PAL]                       = F("Juggle Moving Pixels");
+    _name[FX_MODE_FILL_BEAT]                        = F("Color Fill Beat");
+    _name[FX_MODE_DOT_BEAT]                         = F("Moving Dots");
+    _name[FX_MODE_DOT_COL_WIPE]                     = F("Moving Dots Color Wipe");
+    _name[FX_MODE_COLOR_WIPE_SAWTOOTH]              = F("Color Wipe Sawtooth");
+    _name[FX_MODE_COLOR_WIPE_SINE]                  = F("Color Wipe Sine");
+    _name[FX_MODE_COLOR_WIPE_QUAD]                  = F("Color Wipe Quad");
+    _name[FX_MODE_COLOR_WIPE_TRIWAVE]               = F("Color Wipe Triwave");
     _name[FX_MODE_MULTI_DYNAMIC] = F("Multi Dynamic");
     _name[FX_MODE_RAINBOW] = F("Rainbow");
     _name[FX_MODE_RAINBOW_CYCLE] = F("Rainbow Cycle");
@@ -736,7 +742,7 @@ private:
       fade_out(uint8_t fadeB),
       drawFractionalBar(int pos16, int width, const CRGBPalette16 &pal, uint8_t cindex, uint8_t max_bright, bool mixColor),
       coolLikeIncandescent(CRGB &c, uint8_t phase),
-      setPixelDirection(uint16_t i, bool dir, uint8 *directionFlags),
+      setPixelDirection(uint16_t i, bool dir, uint8_t *directionFlags),
       brightenOrDarkenEachPixel(fract8 fadeUpAmount, fract8 fadeDownAmount, uint8_t *directionFlags),
       draw_sunrise_step(uint16_t step),
       m_sunrise_sunset(bool isSunrise),
@@ -815,7 +821,7 @@ private:
       makeDarker(const CRGB &color, fract8 howMuchDarker);
 
   bool
-  getPixelDirection(uint16_t i, uint8 *directionFlags);
+  getPixelDirection(uint16_t i, uint8_t *directionFlags);
 
   static inline uint16_t
   triwave16(uint16_t in),

@@ -42,35 +42,55 @@
 
 
  **************************************************************/
+//#define FASTLED_ALLOW_INTERRUPTS 0
 
+#ifdef ESP8266
 #include <FS.h>
+#endif
+#ifdef ESP32
+#include <FS.h>
+#include <SPIFFS.h>
+#endif
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#ifdef ESP8266
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#endif
+#ifdef ESP32
+#include <WiFi.h>
+#include <WebServer.h>
+#endif
 #include <WebSocketsServer.h>
+#ifdef ESP8266
 #include <WiFiManager.h>
+#endif
 #include <ArduinoOTA.h>
 #include <EEPROM.h>
 
+//#ifdef ESP8266
 #define FASTLED_ESP8266_RAW_PIN_ORDER
 #define FASTLED_ESP8266_DMA
 #define FASTLED_USE_PROGMEM 1
+//#endif
+
 
 #include "debug_help.h"
 
 #include "defaults.h"
 
+#ifdef ESP8266
 extern "C"
 {
 #include "user_interface.h"
 }
+#endif
 
 // new approach starts here:
 #include "led_strip.h"
 
 
-#define BUILD_VERSION ("LED_Control_Web_SRV_0.9.3_")
+#define BUILD_VERSION ("LED_ESP8266_32_Web_SRV_0.9.3_")
 #ifndef BUILD_VERSION
 #error "We need a SW Version and Build Version!"
 #endif
@@ -84,11 +104,21 @@ String build_version = BUILD_VERSION + String(__TIMESTAMP__);
 
 /* Definitions for network usage */
 /* maybe move all wifi stuff to separate files.... */
-
+#ifdef ESP8266
 ESP8266WebServer server(80);
 WebSocketsServer *webSocketsServer; // webSocketsServer = WebSocketsServer(81);
-
 String AP_SSID = LED_NAME + String(ESP.getChipId());
+#endif
+#ifdef ESP32
+WebServer  *server;
+WebSocketsServer *webSocketsServer; // webSocketsServer = WebSocketsServer(81);
+String AP_SSID = LED_NAME + String((uint32_t)ESP.getEfuseMac());
+
+const char * wlan_ssid = WLAN_SSID;
+const char * wlan_password = WLAN_PASSWORD;
+
+#endif
+
 
 /* END Network Definitions */
 
@@ -97,7 +127,7 @@ bool shouldSaveRuntime = false;
 
 WS2812FX::segment seg;
 
-StaticJsonBuffer<3000> jsonBuffer;
+//StaticJsonBuffer<3000> jsonBuffer;
 
 #include "FSBrowser.h"
 
@@ -125,13 +155,25 @@ void saveEEPROMData(void),
 const String
 pals_setup(void);
 
-uint32
+uint32_t
 getResetReason(void);
+
+
+void my_delay(uint32_t ms)
+{
+    uint32_t now = millis();
+    vTaskDelay(ms / portTICK_PERIOD_MS);
+    yield();
+    while(millis()<now+ms) {}
+}
+
+
 
 // used to send an answer as INT to the calling http request
 // TODO: Use one answer function with parameters being overloaded
 void sendInt(String name, uint16_t value)
 {
+  DynamicJsonBuffer jsonBuffer(200);
   JsonObject& answerObj = jsonBuffer.createObject();
   JsonObject& answer = answerObj.createNestedObject("returnState");
   answer[name] = value;
@@ -154,7 +196,7 @@ void sendInt(String name, uint16_t value)
   #endif
   jsonBuffer.clear();
   DEBUGPRNT("Send HTML respone 200, application/json with value: " + ret);
-  server.send(200, "application/json", ret);
+  server->send(200, "application/json", ret);
 }
 
 // used to send an answer as String to the calling http request
@@ -169,6 +211,7 @@ void sendString(String name, String value)
   answer += value;
   answer += "\" } }";
   */
+  DynamicJsonBuffer jsonBuffer(200);
   JsonObject& answerObj = jsonBuffer.createObject();
   JsonObject& answer = answerObj.createNestedObject("returnState");
   answer[name] = value;
@@ -186,7 +229,7 @@ void sendString(String name, String value)
 
   DEBUGPRNT("Send HTML respone 200, application/json with value: " + ret);
 
-  server.send(200, "application/json", ret);
+  server->send(200, "application/json", ret);
 }
 
 // used to send an answer as JSONString to the calling http request
@@ -194,7 +237,7 @@ void sendString(String name, String value)
 void sendAnswer(String jsonAnswer)
 {
   String answer = "{ \"returnState\": { " + jsonAnswer + "} }";
-  server.send(200, "application/json", answer);
+  server->send(200, "application/json", answer);
 }
 
 // broadcasts the name and value to all websocket clients
@@ -205,6 +248,7 @@ void broadcastInt(String name, uint16_t value)
   DEBUGPRNT("Send websocket broadcast with value: " + json);
   webSocketsServer->broadcastTXT(json);
   */
+  DynamicJsonBuffer jsonBuffer(200);
   JsonObject& answerObj = jsonBuffer.createObject();
   JsonObject& answer = answerObj.createNestedObject("currentState");
   answer["name"] = name;
@@ -234,6 +278,7 @@ void broadcastString(String name, String value)
   DEBUGPRNT("Send websocket broadcast with value: " + json);
   webSocketsServer->broadcastTXT(json);
   */
+  DynamicJsonBuffer jsonBuffer(200);
   JsonObject& answerObj = jsonBuffer.createObject();
   JsonObject& answer = answerObj.createNestedObject("currentState");
   answer["name"] = name;
@@ -627,7 +672,7 @@ void initOverTheAirUpdate(void)
 {
   DEBUGPRNT("Initializing OTA capabilities....");
   showInitColor(CRGB::Blue);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
   /* init OTA */
   // Port defaults to 8266
   ArduinoOTA.setPort(8266);
@@ -661,18 +706,19 @@ void initOverTheAirUpdate(void)
         strip->leds[i] = CRGB(strip_color32(r, g, 0));
       }
       strip->show();
-      delay(250);
+      my_delay(250);
       for (uint16_t i = 0; i < strip->getStripLength(); i++)
       {
         strip->leds[i] = CRGB::Black;
       }
       strip->show();
-      delay(500);
+      my_delay(500);
     }
     // we need to delete the websocket server in order to have OTA correctly running.
     delete webSocketsServer;
     // we stop the webserver to not get interrupted....
-    server.stop();
+    server->stop();
+    delete server;
     // we indicate our sktch that OTA is currently running (should actually not be required)
     OTAisRunning = true;
   });
@@ -690,7 +736,7 @@ void initOverTheAirUpdate(void)
         //strip.setPixelColor(p, 0, i-1 ,0);
       }
       strip->show();
-      delay(2);
+      my_delay(2);
     }
     // indicate that OTA is no longer running.
     OTAisRunning = false;
@@ -739,19 +785,19 @@ void initOverTheAirUpdate(void)
         strip->leds[i] = strip_color32((uint8_t)c, 0, 0);
       }
       strip->show();
-      delay(2);
+      my_delay(2);
     }
     // We wait 10 seconds and then restart the ESP...
-    delay(10000);
+    my_delay(10000);
     ESP.restart();
   });
   // start the service
   ArduinoOTA.begin();
   DEBUGPRNT("OTA capabilities initialized....");
   showInitColor(CRGB::Green);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
   showInitColor(CRGB::Black);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
 }
 
 // for DEBUG purpose without Serial connection...
@@ -762,12 +808,13 @@ void showInitColor(CRGB Color)
 #endif
 }
 
+#ifdef ESP8266
 // setup the Wifi connection with Wifi Manager...
 void setupWiFi(void)
 {
-
   showInitColor(CRGB::Blue);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
+
 
   WiFi.hostname(LED_NAME + String(ESP.getChipId()));
 
@@ -786,19 +833,104 @@ void setupWiFi(void)
   {
     DEBUGPRNT("failed to connect, we should reset as see if it connects");
     showInitColor(CRGB::Yellow);
-    delay(3000);
+    my_delay(3000);
     showInitColor(CRGB::Red);
     ESP.restart();
-    delay(5000);
+    my_delay(5000);
   }
 //if we get here we have connected to the WiFi
   DEBUGPRNT("local ip: ");
   DEBUGPRNT(WiFi.localIP());
 
   showInitColor(CRGB::Green);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
   showInitColor(CRGB::Black);
+
 }
+#endif
+#ifdef ESP32
+bool myWiFiFirstConnect = true;
+void myWiFiTask(void *pvParameters) {
+  wl_status_t state;
+  while (true) {
+    state = WiFi.status();
+    if (state != WL_CONNECTED) {  // We have no connection
+      if (state == WL_NO_SHIELD) {  // WiFi.begin wasn't called yet
+        DEBUGPRNT("Connecting WiFi");
+        DEBUGPRNT("Set Mode STA");
+        WiFi.mode(WIFI_STA);
+        DEBUGPRNT("Connect to WLAN with WiFi.Befin()");
+        WiFi.begin(wlan_ssid, wlan_password);
+        my_delay(100);
+      } else if (state == WL_CONNECT_FAILED) {  // WiFi.begin has failed (AUTH_FAIL)
+        DEBUGPRNT("Disconnecting WiFi");
+
+        WiFi.disconnect(true);
+        my_delay(100);
+
+      } else if (state == WL_DISCONNECTED) {  // WiFi.disconnect was done or Router.WiFi got out of range
+        if (!myWiFiFirstConnect) {  // Report only once
+          myWiFiFirstConnect = true;
+
+          DEBUGPRNT("WiFi disconnected");
+          my_delay(100);
+        }
+      }
+      DEBUGPRNT("Delay 2000 ... lets see.");
+      my_delay(2000);
+    } else { // We have connection
+      if (myWiFiFirstConnect) {  // Report only once
+        myWiFiFirstConnect = false;
+        
+         DEBUGPRNT("Connected to ");
+         DEBUGPRNT(WLAN_SSID);
+         DEBUGPRNT("IP address: ");
+         DEBUGPRNT(WiFi.localIP());
+         DEBUGPRNT("");
+         //manageTime();
+      }
+      DEBUGPRNT("Wait 10 seconds in case we are connected. its sufficient....");
+      delay (10000); // Check again in about 10 s
+    }
+    DEBUGPRNT("General Task delay: 2000");
+    my_delay(2000);
+  }
+}
+
+void setupWiFi(void)
+{
+  showInitColor(CRGB::Blue);
+  DEBUGPRNT("SetupWifi Start");
+  my_delay(INITDELAY);
+ 
+  xTaskCreatePinnedToCore(myWiFiTask,   "myWiFiTask",   8192, NULL, 1, NULL, 1);
+
+  DEBUGPRNT("Going to autoconnect to WiFi");
+  uint16_t counter = 0;
+  DEBUGPRNT("Waiting for WiFi task to connect...");
+  while(WiFi.status() != WL_CONNECTED)
+  {
+    if(counter++ >= 300) 
+    {
+      DEBUGPRNT("Failed to connect. Restarting...");
+      esp_deep_sleep(100);
+    }
+    my_delay(1000);
+  }
+//if we get here we have connected to the WiFi
+  DEBUGPRNT("local ip: ");
+  DEBUGPRNT(WiFi.localIP());
+
+  showInitColor(CRGB::Green);
+  my_delay(INITDELAY);
+  showInitColor(CRGB::Black);
+
+}
+#endif
+
+
+
+
 
 // helper function to change an 8bit value by the given percentage
 // TODO: we could use 8bit fractions for performance
@@ -815,12 +947,12 @@ void handleSet(void)
 {
   // Debug only
   #ifdef DEBUG
-  IPAddress add = server.client().remoteIP();
+  IPAddress add = server->client().remoteIP();
   DEBUGPRNT("The HTTP Request was received by " + add.toString());
   DEBUGPRNT("<Begin>Server Args:");
-  for (uint8_t i = 0; i < server.args(); i++)
+  for (uint8_t i = 0; i < server->args(); i++)
   {
-    DEBUGPRNT(server.argName(i) + "\t" + server.arg(i));
+    DEBUGPRNT(server->argName(i) + "\t" + server->arg(i));
   }
   DEBUGPRNT("<End> Server Args");
   #endif
@@ -845,7 +977,7 @@ void handleSet(void)
   // rnE = Range end Pixel;
   // here we set a new mode if we have the argument mode
 
-  if (server.hasArg("mo"))
+  if (server->hasArg("mo"))
   {
     // flag to decide if this is an library effect
     bool isWS2812FX = false;
@@ -855,7 +987,7 @@ void handleSet(void)
     DEBUGPRNT("got Argument mo....");
 
     // just switch to the next if we get an "u" for up
-    if (server.arg("mo")[0] == 'u')
+    if (server->arg("mo")[0] == 'u')
     {
       DEBUGPRNT("got Argument mode up....");
       //effect = effect + 1;
@@ -863,7 +995,7 @@ void handleSet(void)
       effect = strip->nextMode(AUTO_MODE_UP);
     }
     // switch to the previous one if we get a "d" for down
-    else if (server.arg("mo")[0] == 'd')
+    else if (server->arg("mo")[0] == 'd')
     {
       DEBUGPRNT("got Argument mode down....");
       //effect = effect - 1;
@@ -871,7 +1003,7 @@ void handleSet(void)
       effect = strip->nextMode(AUTO_MODE_DOWN);
     }
     // if we get an "o" for off, we switch off
-    else if (server.arg("mo")[0] == 'o')
+    else if (server->arg("mo")[0] == 'o')
     {
       DEBUGPRNT("got Argument mode Off....");
       strip->setPower(false);
@@ -880,7 +1012,7 @@ void handleSet(void)
     }
     // for backward compatibility and FHEM:
     // --> activate fire flicker
-    else if (server.arg("mo")[0] == 'f')
+    else if (server->arg("mo")[0] == 'f')
     {
 
       DEBUGPRNT("got Argument fire....");
@@ -890,7 +1022,7 @@ void handleSet(void)
     }
     // for backward compatibility and FHEM:
     // --> activate rainbow effect
-    else if (server.arg("mo")[0] == 'r')
+    else if (server->arg("mo")[0] == 'r')
     {
       DEBUGPRNT("got Argument mode rainbow cycle....");
       effect = FX_MODE_RAINBOW_CYCLE;
@@ -898,7 +1030,7 @@ void handleSet(void)
     }
     // for backward compatibility and FHEM:
     // --> activate the K.I.T.T. (larson scanner)
-    else if (server.arg("mo")[0] == 'k')
+    else if (server->arg("mo")[0] == 'k')
     {
       DEBUGPRNT("got Argument mode KITT....");
       effect = FX_MODE_LARSON_SCANNER;
@@ -906,7 +1038,7 @@ void handleSet(void)
     }
     // for backward compatibility and FHEM:
     // --> activate Twinkle Fox
-    else if (server.arg("mo")[0] == 's')
+    else if (server->arg("mo")[0] == 's')
     {
       DEBUGPRNT("got Argument mode Twinkle Fox....");
       effect = FX_MODE_TWINKLE_FOX;
@@ -914,7 +1046,7 @@ void handleSet(void)
     }
     // for backward compatibility and FHEM:
     // --> activate Twinkle Fox in white...
-    else if (server.arg("mo")[0] == 'w')
+    else if (server->arg("mo")[0] == 'w')
     {
       DEBUGPRNT("got Argument mode White Twinkle....");
       strip->setColor(CRGBPalette16(CRGB::White));
@@ -922,20 +1054,20 @@ void handleSet(void)
       isWS2812FX = true;
     }
     // sunrise effect
-    else if (server.arg("mo") == "Sunrise")
+    else if (server->arg("mo") == "Sunrise")
     {
       DEBUGPRNT("got Argument mode sunrise....");
       // sunrise time in seconds
-      if (server.hasArg("sec"))
+      if (server->hasArg("sec"))
       {
         DEBUGPRNT("got Argument sec....");
-        strip->setSunriseTime(((uint16_t)strtoul(server.arg("sec").c_str(), NULL, 10)) / 60);
+        strip->setSunriseTime(((uint16_t)strtoul(server->arg("sec").c_str(), NULL, 10)) / 60);
       }
       // sunrise time in minutes
-      else if (server.hasArg("min"))
+      else if (server->hasArg("min"))
       {
         DEBUGPRNT("got Argument min....");
-        strip->setSunriseTime(((uint16_t)strtoul(server.arg("min").c_str(), NULL, 10)));
+        strip->setSunriseTime(((uint16_t)strtoul(server->arg("min").c_str(), NULL, 10)));
       }
       isWS2812FX = true;
       effect = FX_MODE_SUNRISE;
@@ -944,20 +1076,20 @@ void handleSet(void)
       //sendStatus = true;
     }
     // the same for sunset....
-    else if (server.arg("mo") == "Sunset")
+    else if (server->arg("mo") == "Sunset")
     {
       DEBUGPRNT("got Argument mode sunset....");
       // sunrise time in seconds
-      if (server.hasArg("sec"))
+      if (server->hasArg("sec"))
       {
         DEBUGPRNT("got Argument sec....");
-        strip->setSunriseTime(((uint16_t)strtoul(server.arg("sec").c_str(), NULL, 10)) / 60);
+        strip->setSunriseTime(((uint16_t)strtoul(server->arg("sec").c_str(), NULL, 10)) / 60);
       }
       // sunrise time in minutes
-      else if (server.hasArg("min"))
+      else if (server->hasArg("min"))
       {
         DEBUGPRNT("got Argument min....");
-        strip->setSunriseTime( ((uint16_t)strtoul(server.arg("min").c_str(), NULL, 10)));
+        strip->setSunriseTime( ((uint16_t)strtoul(server->arg("min").c_str(), NULL, 10)));
       }
 
       // answer for the "calling" party
@@ -973,7 +1105,7 @@ void handleSet(void)
     else
     {
       DEBUGPRNT("got Argument mode and seems to be an Effect....");
-      effect = (uint8_t)strtoul(server.arg("mo").c_str(), NULL, 10);
+      effect = (uint8_t)strtoul(server->arg("mo").c_str(), NULL, 10);
       isWS2812FX = true;
     }
     // sanity only, actually handled in the library...
@@ -996,10 +1128,10 @@ void handleSet(void)
     }
   }
   // global on/off
-  if (server.hasArg("power"))
+  if (server->hasArg("power"))
   {
     DEBUGPRNT("got Argument power....");
-    if (server.arg("power")[0] == '0')
+    if (server->arg("power")[0] == '0')
     {
       strip->setPower(false);
     }
@@ -1012,10 +1144,10 @@ void handleSet(void)
     //broadcastInt("power", strip->getPower());
   }
 
-  if(server.hasArg("isRunning"))
+  if(server->hasArg("isRunning"))
   {
     DEBUGPRNT("got Argument \"isRunning\"....");
-    if (server.arg("isRunning")[0] == '0')
+    if (server->arg("isRunning")[0] == '0')
     {
       strip->setIsRunning(false);
     }
@@ -1029,10 +1161,10 @@ void handleSet(void)
   }
 
   // if we got a palette change
-  if (server.hasArg("pa"))
+  if (server->hasArg("pa"))
   {
     // TODO: Possibility to setColors and new Palettes...
-    uint8_t pal = (uint8_t)strtoul(server.arg("pa").c_str(), NULL, 10);
+    uint8_t pal = (uint8_t)strtoul(server->arg("pa").c_str(), NULL, 10);
     DEBUGPRNT("New palette with value: " + String(pal));
     strip->setTargetPalette(pal);
     //  sendAnswer(   "\"palette\": " + String(pal) + ", \"palette name\": \"" +
@@ -1041,21 +1173,21 @@ void handleSet(void)
   }
 
   // if we got a new brightness value
-  if (server.hasArg("br"))
+  if (server->hasArg("br"))
   {
     DEBUGPRNT("got Argument brightness....");
     uint8_t brightness = strip->getBrightness();
-    if (server.arg("br")[0] == 'u')
+    if (server->arg("br")[0] == 'u')
     {
       brightness = changebypercentage(brightness, 110);
     }
-    else if (server.arg("br")[0] == 'd')
+    else if (server->arg("br")[0] == 'd')
     {
       brightness = changebypercentage(brightness, 90);
     }
     else
     {
-      brightness = constrain((uint8_t)strtoul(server.arg("br").c_str(), NULL, 10), BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+      brightness = constrain((uint8_t)strtoul(server->arg("br").c_str(), NULL, 10), BRIGHTNESS_MIN, BRIGHTNESS_MAX);
     }
     strip->setBrightness(brightness);
     //sendInt("brightness", brightness);
@@ -1065,20 +1197,20 @@ void handleSet(void)
   // if we got a speed value
   // for backward compatibility.
   // is beat88 value anyway
-  if (server.hasArg("sp"))
+  if (server->hasArg("sp"))
   {
 #ifdef DEBUG
     DEBUGPRNT("got Argument speed....");
 #endif
     uint16_t speed = strip->getBeat88();
-    if (server.arg("sp")[0] == 'u')
+    if (server->arg("sp")[0] == 'u')
     {
       uint16_t ret = max((speed * 115) / 100, 10);
       if (ret > BEAT88_MAX)
         ret = BEAT88_MAX;
       speed = ret;
     }
-    else if (server.arg("sp")[0] == 'd')
+    else if (server->arg("sp")[0] == 'd')
     {
       uint16_t ret = max((speed * 80) / 100, 10);
       if (ret > BEAT88_MAX)
@@ -1087,7 +1219,7 @@ void handleSet(void)
     }
     else
     {
-      speed = constrain((uint16_t)strtoul(server.arg("sp").c_str(), NULL, 10), BEAT88_MIN, BEAT88_MAX);
+      speed = constrain((uint16_t)strtoul(server->arg("sp").c_str(), NULL, 10), BEAT88_MIN, BEAT88_MAX);
     }
     strip->setSpeed(speed);
     strip->show();
@@ -1097,20 +1229,20 @@ void handleSet(void)
   }
 
   // if we got a speed value (as beat88)
-  if (server.hasArg("be"))
+  if (server->hasArg("be"))
   {
 #ifdef DEBUG
     DEBUGPRNT("got Argument speed (beat)....");
 #endif
     uint16_t speed = strip->getBeat88();
-    if (server.arg("be")[0] == 'u')
+    if (server->arg("be")[0] == 'u')
     {
       uint16_t ret = max((speed * 115) / 100, 10);
       if (ret > BEAT88_MAX)
         ret = BEAT88_MAX;
       speed = ret;
     }
-    else if (server.arg("be")[0] == 'd')
+    else if (server->arg("be")[0] == 'd')
     {
       uint16_t ret = max((speed * 80) / 100, 10);
       if (ret > BEAT88_MAX)
@@ -1119,7 +1251,7 @@ void handleSet(void)
     }
     else
     {
-      speed = constrain((uint16_t)strtoul(server.arg("be").c_str(), NULL, 10), BEAT88_MIN, BEAT88_MAX);
+      speed = constrain((uint16_t)strtoul(server->arg("be").c_str(), NULL, 10), BEAT88_MIN, BEAT88_MAX);
     }
     strip->setSpeed(speed);
     strip->show();
@@ -1135,91 +1267,91 @@ void handleSet(void)
   uint32_t color = strip->getColor(0);
   bool setColor = false;
   // we got red
-  if (server.hasArg("re"))
+  if (server->hasArg("re"))
   {
     setColor = true;
 #ifdef DEBUG
     DEBUGPRNT("got Argument red....");
 #endif
     uint8_t re = Red(color);
-    if (server.arg("re")[0] == 'u')
+    if (server->arg("re")[0] == 'u')
     {
       re = changebypercentage(re, 110);
     }
-    else if (server.arg("re")[0] == 'd')
+    else if (server->arg("re")[0] == 'd')
     {
       re = changebypercentage(re, 90);
     }
     else
     {
-      re = constrain((uint8_t)strtoul(server.arg("re").c_str(), NULL, 10), 0, 255);
+      re = constrain((uint8_t)strtoul(server->arg("re").c_str(), NULL, 10), 0, 255);
     }
     color = (color & 0x00ffff) | (re << 16);
   }
   // we got green
-  if (server.hasArg("gr"))
+  if (server->hasArg("gr"))
   {
     setColor = true;
 #ifdef DEBUG
     DEBUGPRNT("got Argument green....");
 #endif
     uint8_t gr = Green(color);
-    if (server.arg("gr")[0] == 'u')
+    if (server->arg("gr")[0] == 'u')
     {
       gr = changebypercentage(gr, 110);
     }
-    else if (server.arg("gr")[0] == 'd')
+    else if (server->arg("gr")[0] == 'd')
     {
       gr = changebypercentage(gr, 90);
     }
     else
     {
-      gr = constrain((uint8_t)strtoul(server.arg("gr").c_str(), NULL, 10), 0, 255);
+      gr = constrain((uint8_t)strtoul(server->arg("gr").c_str(), NULL, 10), 0, 255);
     }
     color = (color & 0xff00ff) | (gr << 8);
   }
   // we got blue
-  if (server.hasArg("bl"))
+  if (server->hasArg("bl"))
   {
     setColor = true;
 #ifdef DEBUG
     DEBUGPRNT("got Argument blue....");
 #endif
     uint8_t bl = Blue(color);
-    if (server.arg("bl")[0] == 'u')
+    if (server->arg("bl")[0] == 'u')
     {
       bl = changebypercentage(bl, 110);
     }
-    else if (server.arg("bl")[0] == 'd')
+    else if (server->arg("bl")[0] == 'd')
     {
       bl = changebypercentage(bl, 90);
     }
     else
     {
-      bl = constrain((uint8_t)strtoul(server.arg("bl").c_str(), NULL, 10), 0, 255);
+      bl = constrain((uint8_t)strtoul(server->arg("bl").c_str(), NULL, 10), 0, 255);
     }
     color = (color & 0xffff00) | (bl << 0);
   }
   // we got a 32bit color value (24 actually)
-  if (server.hasArg("co"))
+  if (server->hasArg("co"))
   {
     setColor = true;
 #ifdef DEBUG
     DEBUGPRNT("got Argument color....");
 #endif
-    color = constrain((uint32_t)strtoul(server.arg("co").c_str(), NULL, 16), 0, 0xffffff);
+    color = constrain((uint32_t)strtoul(server->arg("co").c_str(), NULL, 16), 0, 0xffffff);
   }
   // we got one solid color value as r, g, b
-  if (server.hasArg("solidColor"))
+  if (server->hasArg("solidColor"))
   {
     setColor = true;
 #ifdef DEBUG
     DEBUGPRNT("got Argument solidColor....");
 #endif
     uint8_t r, g, b;
-    r = constrain((uint8_t)strtoul(server.arg("r").c_str(), NULL, 10), 0, 255);
-    g = constrain((uint8_t)strtoul(server.arg("g").c_str(), NULL, 10), 0, 255);
-    b = constrain((uint8_t)strtoul(server.arg("b").c_str(), NULL, 10), 0, 255);
+    r = constrain((uint8_t)strtoul(server->arg("r").c_str(), NULL, 10), 0, 255);
+    g = constrain((uint8_t)strtoul(server->arg("g").c_str(), NULL, 10), 0, 255);
+    b = constrain((uint8_t)strtoul(server->arg("b").c_str(), NULL, 10), 0, 255);
     color = (r << 16) | (g << 8) | (b << 0);
     // CRGB solidColor(color); // obsolete?
 
@@ -1227,13 +1359,13 @@ void handleSet(void)
   }
   // a signle pixel...
   //FIXME: Does not yet work. Lets simplyfy all of this!
-  if (server.hasArg("pi"))
+  if (server->hasArg("pi"))
   {
 #ifdef DEBUG
     DEBUGPRNT("got Argument pixel....");
 #endif
     //setEffect(FX_NO_FX);
-    uint16_t pixel = constrain((uint16_t)strtoul(server.arg("pi").c_str(), NULL, 10), 0, strip->getStripLength() - 1);
+    uint16_t pixel = constrain((uint16_t)strtoul(server->arg("pi").c_str(), NULL, 10), 0, strip->getStripLength() - 1);
 
     strip->setMode(FX_MODE_VOID);
     strip->leds[pixel] = CRGB(color);
@@ -1241,13 +1373,13 @@ void handleSet(void)
     // a range of pixels from start rnS to end rnE
   }
   //FIXME: Does not yet work. Lets simplyfy all of this!
-  else if (server.hasArg("rnS") && server.hasArg("rnE"))
+  else if (server->hasArg("rnS") && server->hasArg("rnE"))
   {
 #ifdef DEBUG
     DEBUGPRNT("got Argument range start / range end....");
 #endif
-    uint16_t start = constrain((uint16_t)strtoul(server.arg("rnS").c_str(), NULL, 10), 0, strip->getStripLength());
-    uint16_t end = constrain((uint16_t)strtoul(server.arg("rnE").c_str(), NULL, 10), start, strip->getStripLength());
+    uint16_t start = constrain((uint16_t)strtoul(server->arg("rnS").c_str(), NULL, 10), 0, strip->getStripLength());
+    uint16_t end = constrain((uint16_t)strtoul(server->arg("rnE").c_str(), NULL, 10), start, strip->getStripLength());
 
     strip->setMode(FX_MODE_VOID);
     for (uint16_t i = start; i <= end; i++)
@@ -1257,7 +1389,7 @@ void handleSet(void)
     //sendStatus = true;
     // one color for the complete strip
   }
-  else if (server.hasArg("rgb"))
+  else if (server->hasArg("rgb"))
   {
 #ifdef DEBUG
     DEBUGPRNT("got Argument rgb....");
@@ -1276,45 +1408,45 @@ void handleSet(void)
   }
 
   // autoplay flag changes
-  if (server.hasArg("autoplay"))
+  if (server->hasArg("autoplay"))
   {
-    uint16_t value = String(server.arg("autoplay")).toInt();
+    uint16_t value = String(server->arg("autoplay")).toInt();
     strip->setAutoplay((AUTOPLAYMODES)value);
     //sendInt("Autoplay Mode", value);
     //broadcastInt("autoplay", value);
   }
 
   // autoplay duration changes
-  if (server.hasArg("autoplayDuration"))
+  if (server->hasArg("autoplayDuration"))
   {
-    uint16_t value = String(server.arg("autoplayDuration")).toInt();
+    uint16_t value = String(server->arg("autoplayDuration")).toInt();
     strip->setAutoplayDuration(value);
     //sendInt("Autoplay Mode Interval", value);
     //broadcastInt("autoplayDuration", value);
   }
 
   // auto plaette change
-  if (server.hasArg("autopal"))
+  if (server->hasArg("autopal"))
   {
-    uint16_t value = String(server.arg("autopal")).toInt();
+    uint16_t value = String(server->arg("autopal")).toInt();
     strip->setAutopal((AUTOPLAYMODES)value);
     //sendInt("Autoplay Palette", value);
     //broadcastInt("autopal", value);
   }
 
   // auto palette change duration changes
-  if (server.hasArg("autopalDuration"))
+  if (server->hasArg("autopalDuration"))
   {
-    uint16_t value = String(server.arg("autopalDuration")).toInt();
+    uint16_t value = String(server->arg("autopalDuration")).toInt();
     strip->setAutopalDuration(value);
     //sendInt("Autoplay Palette Interval", value);
     //broadcastInt("autopalDuration", value);
   }
 
   // time for cycling through the basehue value changes
-  if (server.hasArg("huetime"))
+  if (server->hasArg("huetime"))
   {
-    uint16_t value = String(server.arg("huetime")).toInt();
+    uint16_t value = String(server->arg("huetime")).toInt();
     //sendInt("Hue change time", value);
     //broadcastInt("huetime", value);
     strip->setHuetime(value);
@@ -1323,9 +1455,9 @@ void handleSet(void)
 #pragma message "We could implement a value to change how a palette is distributed accross the strip"
 
   // the hue offset for a given effect (if - e.g. not spread across the whole strip)
-  if (server.hasArg("deltahue"))
+  if (server->hasArg("deltahue"))
   {
-    uint16_t value = constrain(String(server.arg("deltahue")).toInt(), 0, 255);
+    uint16_t value = constrain(String(server->arg("deltahue")).toInt(), 0, 255);
     //sendInt("Delta hue per change", value);
     //broadcastInt("deltahue", value);
     strip->setDeltaHue(value);
@@ -1333,9 +1465,9 @@ void handleSet(void)
   }
 
   // parameter for teh "fire" - flame cooldown
-  if (server.hasArg("cooling"))
+  if (server->hasArg("cooling"))
   {
-    uint16_t value = String(server.arg("cooling")).toInt();
+    uint16_t value = String(server->arg("cooling")).toInt();
     //sendInt("Fire Cooling", value);
     //broadcastInt("cooling", value);
     strip->setCooling(value);
@@ -1343,9 +1475,9 @@ void handleSet(void)
   }
 
   // parameter for the sparking - new flames
-  if (server.hasArg("sparking"))
+  if (server->hasArg("sparking"))
   {
-    uint16_t value = String(server.arg("sparking")).toInt();
+    uint16_t value = String(server->arg("sparking")).toInt();
     //sendInt("Fire sparking", value);
     //broadcastInt("sparking", value);
     strip->setSparking(value);
@@ -1353,9 +1485,9 @@ void handleSet(void)
   }
 
   // parameter for twinkle fox (speed)
-  if (server.hasArg("twinkleSpeed"))
+  if (server->hasArg("twinkleSpeed"))
   {
-    uint16_t value = String(server.arg("twinkleSpeed")).toInt();
+    uint16_t value = String(server->arg("twinkleSpeed")).toInt();
     //sendInt("Twinkle Speed", value);
     //broadcastInt("twinkleSpeed", value);
     strip->setTwinkleSpeed(value);
@@ -1363,9 +1495,9 @@ void handleSet(void)
   }
 
   // parameter for twinkle fox (density)
-  if (server.hasArg("twinkleDensity"))
+  if (server->hasArg("twinkleDensity"))
   {
-    uint16_t value = String(server.arg("twinkleDensity")).toInt();
+    uint16_t value = String(server->arg("twinkleDensity")).toInt();
     //sendInt("Twinkle Density", value);
     //broadcastInt("twinkleDensity", value);
     strip->setTwinkleDensity(value);
@@ -1373,9 +1505,9 @@ void handleSet(void)
   }
 
   // parameter for number of bars (beat sine glows etc...)
-  if (server.hasArg("numBars"))
+  if (server->hasArg("numBars"))
   {
-    uint16_t value = String(server.arg("numBars")).toInt();
+    uint16_t value = String(server->arg("numBars")).toInt();
     if (value > MAX_NUM_BARS)
       value = max(MAX_NUM_BARS, 1);
     //sendInt("Number of Bars", value);
@@ -1385,9 +1517,9 @@ void handleSet(void)
   }
 
   // parameter to change the palette blend type for cetain effects
-  if (server.hasArg("blendType"))
+  if (server->hasArg("blendType"))
   {
-    uint16_t value = String(server.arg("blendType")).toInt();
+    uint16_t value = String(server->arg("blendType")).toInt();
 
     //broadcastInt("blendType", value);
     if (value)
@@ -1404,9 +1536,9 @@ void handleSet(void)
   }
 
   // parameter to change the Color Temperature of the Strip
-  if (server.hasArg("ColorTemperature"))
+  if (server->hasArg("ColorTemperature"))
   {
-    uint8_t value = String(server.arg("ColorTemperature")).toInt();
+    uint8_t value = String(server->arg("ColorTemperature")).toInt();
 
     //broadcastInt("ColorTemperature", value);
     //sendString("ColorTemperature", strip->getColorTempName(value));
@@ -1415,9 +1547,9 @@ void handleSet(void)
   }
 
   // parameter to change direction of certain effects..
-  if (server.hasArg("reverse"))
+  if (server->hasArg("reverse"))
   {
-    uint16_t value = String(server.arg("reverse")).toInt();
+    uint16_t value = String(server->arg("reverse")).toInt();
     //sendInt("reverse", value);
     //broadcastInt("reverse", value);
     strip->getSegment()->reverse = value;
@@ -1425,9 +1557,9 @@ void handleSet(void)
   }
 
   // parameter to invert colors of all effects..
-  if (server.hasArg("inverse"))
+  if (server->hasArg("inverse"))
   {
-    uint16_t value = String(server.arg("inverse")).toInt();
+    uint16_t value = String(server->arg("inverse")).toInt();
     //sendInt("inverse", value);
     //broadcastInt("inverse", value);
     strip->setInverse(value);
@@ -1435,9 +1567,9 @@ void handleSet(void)
   }
 
   // parameter to divide LEDS into two equal halfs...
-  if (server.hasArg("mirror"))
+  if (server->hasArg("mirror"))
   {
-    uint16_t value = String(server.arg("mirror")).toInt();
+    uint16_t value = String(server->arg("mirror")).toInt();
     //sendInt("mirror", value);
     //broadcastInt("mirror", value);
     strip->setMirror(value);
@@ -1445,18 +1577,18 @@ void handleSet(void)
   }
 
   // parameter so set the max current the leds will draw
-  if (server.hasArg("current"))
+  if (server->hasArg("current"))
   {
-    uint16_t value = String(server.arg("current")).toInt();
+    uint16_t value = String(server->arg("current")).toInt();
     //sendInt("Lamp Max Current", value);
     //broadcastInt("current", value);
     strip->setMilliamps(value);
   }
 
   // parameter for the blur against the previous LED values
-  if (server.hasArg("LEDblur"))
+  if (server->hasArg("LEDblur"))
   {
-    uint8_t value = String(server.arg("LEDblur")).toInt();
+    uint8_t value = String(server->arg("LEDblur")).toInt();
     //sendInt("LEDblur", value);
     //broadcastInt("LEDblur", value);
     strip->setBlur(value);
@@ -1464,35 +1596,35 @@ void handleSet(void)
   }
 
   // parameter for the frames per second (FPS)
-  if (server.hasArg("fps"))
+  if (server->hasArg("fps"))
   {
-    uint8_t value = String(server.arg("fps")).toInt();
+    uint8_t value = String(server->arg("fps")).toInt();
     //sendInt("fps", value);
     //broadcastInt("fps", value);
     strip->setMaxFPS(value);
     strip->setTransition();
   }
 
-  if (server.hasArg("dithering"))
+  if (server->hasArg("dithering"))
   {
-    uint8_t value = String(server.arg("dithering")).toInt();
+    uint8_t value = String(server->arg("dithering")).toInt();
     //sendInt("dithering", value);
     //broadcastInt("dithering", value);
     strip->setDithering(value);
   }
 
-  if (server.hasArg("sunriseset"))
+  if (server->hasArg("sunriseset"))
   {
-    uint8_t value = String(server.arg("sunriseset")).toInt();
+    uint8_t value = String(server->arg("sunriseset")).toInt();
     //sendInt("sunriseset", value);
     //broadcastInt("sunriseset", value);
     strip->getSegment()->sunrisetime = value;
   }
 
   // reset to default values
-  if (server.hasArg("resetdefaults"))
+  if (server->hasArg("resetdefaults"))
   {
-    uint8_t value = String(server.arg("resetdefaults")).toInt();
+    uint8_t value = String(server->arg("resetdefaults")).toInt();
     if (value)
       strip->resetDefaults();
     //sendInt("resetdefaults", 0);
@@ -1501,32 +1633,32 @@ void handleSet(void)
     strip->setTransition();
   }
 
-  if (server.hasArg("damping"))
+  if (server->hasArg("damping"))
   {
-    uint8_t value = constrain(String(server.arg("damping")).toInt(), 0, 100);
+    uint8_t value = constrain(String(server->arg("damping")).toInt(), 0, 100);
     //sendInt("damping", value);
     //broadcastInt("damping", value);
     strip->getSegment()->damping = value;
   }
 
-  if (server.hasArg("addGlitter"))
+  if (server->hasArg("addGlitter"))
   {
-    uint8_t value = constrain(String(server.arg("addGlitter")).toInt(), 0, 100);
+    uint8_t value = constrain(String(server->arg("addGlitter")).toInt(), 0, 100);
     strip->setAddGlitter(value);
   }
-  if (server.hasArg("WhiteOnly"))
+  if (server->hasArg("WhiteOnly"))
   {
-    uint8_t value = constrain(String(server.arg("WhiteOnly")).toInt(), 0, 100);
+    uint8_t value = constrain(String(server->arg("WhiteOnly")).toInt(), 0, 100);
     strip->setWhiteGlitter(value);
   }
-  if (server.hasArg("onBlackOnly"))
+  if (server->hasArg("onBlackOnly"))
   {
-    uint8_t value = constrain(String(server.arg("onBlackOnly")).toInt(), 0, 100);
+    uint8_t value = constrain(String(server->arg("onBlackOnly")).toInt(), 0, 100);
     strip->setOnBlackOnly(value);
   }
-  if (server.hasArg("glitterChance"))
+  if (server->hasArg("glitterChance"))
   {
-    uint8_t value = constrain(String(server.arg("glitterChance")).toInt(), 0, 100);
+    uint8_t value = constrain(String(server->arg("glitterChance")).toInt(), 0, 100);
     strip->setChanceOfGlitter(value);
   }
 
@@ -1534,22 +1666,29 @@ void handleSet(void)
 #ifdef DEBUG
   // Testing different Resets
   // can then be triggered via web interface (at the very bottom)
-  if (server.hasArg("resets"))
+  if (server->hasArg("resets"))
   {
-    uint8_t value = String(server.arg("resets")).toInt();
+    uint8_t value = String(server->arg("resets")).toInt();
     volatile uint8_t d = 1;
     switch (value)
     {
     case 0:
       break;
     case 1: //
+    #ifdef ESP8266
       ESP.reset();
+      #endif
+      #ifdef ESP32
+      ESP.restart();
+      #endif
       break;
     case 2:
       ESP.restart();
       break;
     case 3:
+      #ifdef EPS8266
       ESP.wdtDisable();
+      #endif
       break;
     case 4:
       while (d)
@@ -1568,9 +1707,9 @@ void handleSet(void)
 #endif
 
   // parameter for number of segemts
-  if (server.hasArg("segments"))
+  if (server->hasArg("segments"))
   {
-    uint16_t value = String(server.arg("segments")).toInt();
+    uint16_t value = String(server->arg("segments")).toInt();
     //sendInt("segments", value);
     //broadcastInt("segments", value);
     strip->getSegment()->segments = constrain(value, 1, MAX_NUM_SEGMENTS);
@@ -1586,7 +1725,7 @@ void handleSet(void)
   }
   */
   /// strip->setTransition();  <-- this is not wise as it removes the smooth fading for colors. So we need to set it case by case
-  server.send(200, "text/plain", "OK");
+  server->send(200, "text/plain", "OK");
 }
 
 // if something unknown was called...
@@ -1594,23 +1733,23 @@ void handleNotFound(void)
 {
   String message = "File Not Found\n\n";
   message += "URI: ";
-  message += server.uri();
+  message += server->uri();
   message += "\nMethod: ";
-  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += (server->method() == HTTP_GET) ? "GET" : "POST";
   message += "\nArguments: ";
-  message += server.args();
+  message += server->args();
   message += "\n";
-  for (uint8_t i = 0; i < server.args(); i++)
+  for (uint8_t i = 0; i < server->args(); i++)
   {
-    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+    message += " " + server->argName(i) + ": " + server->arg(i) + "\n";
   }
-  server.send(404, "text/plain", message);
+  server->send(404, "text/plain", message);
 }
 
 void handleGetModes(void)
 {
-  const size_t bufferSize = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(2) + JSON_OBJECT_SIZE(56) + 1070;
-  DynamicJsonBuffer jsonBuffer(bufferSize);
+  const size_t bufferSize = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(2) + JSON_OBJECT_SIZE(56) + 1500;
+  StaticJsonBuffer<bufferSize> jsonBuffer;
 
   JsonObject &root = jsonBuffer.createObject();
 
@@ -1631,7 +1770,7 @@ void handleGetModes(void)
   root.printTo(message);
 #endif
   DEBUGPRNT(message);
-  server.send(200, "application/json", message);
+  server->send(200, "application/json", message);
 }
 
 void handleGetPals(void)
@@ -1658,11 +1797,12 @@ String message = "";
   root.printTo(message);
 #endif
   DEBUGPRNT(message);
-  server.send(200, "application/json", message);
+  server->send(200, "application/json", message);
 }
 
 void handleStatus(void)
 {
+  DynamicJsonBuffer jsonBuffer(1500);
   uint32_t answer_time = micros();
   JsonObject& answerObj = jsonBuffer.createObject();
   JsonObject& currentStateAnswer = answerObj.createNestedObject("currentState");
@@ -1817,7 +1957,12 @@ void handleStatus(void)
   JsonObject& debugAnswer = answerObj.createNestedObject("ESP_Data");
   debugAnswer["DBG_Debug code"] = "On";
   debugAnswer["DBG_CPU_FRQ"] = ESP.getCpuFreqMHz();
+  #ifdef ESP8266
   debugAnswer["DBG_Flash Real Size"] = ESP.getFlashChipRealSize();
+  #endif
+  #ifdef ESP32
+  debugAnswer["DBG_Flash Real Size"] = ESP.getFlashChipSize();
+  #endif
   debugAnswer["DBG_Free RAM"] = ESP.getFreeHeap();
   debugAnswer["DBG_Free Sketch Space"] = ESP.getFreeSketchSpace();
   debugAnswer["DBG_Sketch Size"] = ESP.getSketchSize();
@@ -1837,7 +1982,7 @@ void handleStatus(void)
   answerObj.printTo(message);
 #endif
   DEBUGPRNT(message);
-  server.send(200, "application/json", message);
+  server->send(200, "application/json", message);
   jsonBuffer.clear();
 }
 
@@ -1852,30 +1997,37 @@ void factoryReset(void)
   {
     strip->leds[i] = 0xa00000;
     strip->show();
-    delay(2);
+    my_delay(2);
   }
   strip->show();
-  delay(INITDELAY);
+  my_delay(INITDELAY);
   /*#ifdef DEBUG
   DEBUGPRNT("Reset WiFi Settings");
   #endif
   wifiManager.resetSettings();
-  delay(INITDELAY);
+  my_delay(INITDELAY);
   */
   clearEEPROM();
 //reset and try again
 #ifdef DEBUG
   DEBUGPRNT("Reset ESP and start all over...");
 #endif
-  delay(3000);
+  my_delay(3000);
   ESP.restart();
 }
 
-uint32 getResetReason(void)
+#ifdef ESP8266
+uint32_t getResetReason(void)
 {
   return ESP.getResetInfoPtr()->reason;
 }
-
+#endif
+#ifdef ESP32
+uint32_t getResetReason(void)
+{
+  return (uint32_t)esp_reset_reason();
+}
+#endif
 /*
  * Clear the CRC to startup Fresh....
  * Used in case we end up in a WDT reset (either SW or HW)
@@ -1896,7 +2048,7 @@ void clearCRC(void)
 #ifdef DEBUG
   DEBUGPRNT("Reset ESP and start all over with default values...");
 #endif
-  delay(1000);
+  my_delay(1000);
   ESP.restart();
 }
 
@@ -1919,19 +2071,19 @@ void clearEEPROM(void)
 // To be sure we check the related parameter....
 void handleResetRequest(void)
 {
-  if (server.arg("rst") == "FactoryReset")
+  if (server->arg("rst") == "FactoryReset")
   {
-    server.send(200, "text/plain", "Will now Reset to factory settings. You need to connect to the WLAN AP afterwards....");
+    server->send(200, "text/plain", "Will now Reset to factory settings. You need to connect to the WLAN AP afterwards....");
     factoryReset();
   }
-  else if (server.arg("rst") == "Defaults")
+  else if (server->arg("rst") == "Defaults")
   {
 
     strip->setTargetPalette(0);
     strip->setMode(0);
     strip->stop();
     strip->resetDefaults();
-    server.send(200, "text/plain", "Strip was reset to the default values...");
+    server->send(200, "text/plain", "Strip was reset to the default values...");
     shouldSaveRuntime = true;
   }
 }
@@ -1939,72 +2091,101 @@ void handleResetRequest(void)
 void setupWebServer(void)
 {
   showInitColor(CRGB::Blue);
-  delay(INITDELAY);
-  SPIFFS.begin();
-  {
-#ifdef DEBUG
-    Dir dir = SPIFFS.openDir("/");
-    while (dir.next())
-    {
-      String fileName = dir.fileName();
-      size_t fileSize = dir.fileSize();
-      DEBUGPRNT("FS File: " + fileName + ", size: " + String(fileSize) + "\n");
-    }
-    DEBUGPRNT("\n");
-#endif
+  my_delay(INITDELAY);
+  
+  if(!SPIFFS.begin(true)){
+    Serial.println("An Error has occurred while mounting SPIFFS");
   }
+  #ifdef DEBUG
+    #ifdef ESP8266
+      Dir dir = SPIFFS.openDir("/");
+      while (dir.next())
+      {
+        String fileName = dir.fileName();
+        size_t fileSize = dir.fileSize();
+        DEBUGPRNT("FS File: " + fileName + ", size: " + String(fileSize) + "\n");
+      }
+      DEBUGPRNT("\n");
+    #endif
+    #ifdef ESP32
+      File dir = SPIFFS.open("/");
+      if(!dir.isDirectory()){
+        dir.close();
+        returnFail("NOT DIR");
+      }
+      else
+      {
+        dir.rewindDirectory();
 
-  server.on("/all", HTTP_GET, []() {
+        for (int cnt = 0; true; ++cnt) {
+          File entry = dir.openNextFile();
+          if (!entry)
+          break;
+
+          Serial.print( (entry.isDirectory()) ? "dir: " : "file: ");
+          Serial.println(entry.name()+1);
+          entry.close();
+        } 
+      }
+    #endif
+  #endif
+
+  server->on("/all", HTTP_GET, []() {
 #ifdef DEBUG
     DEBUGPRNT("Called /all!");
 #endif
     String json = getFieldsJson(fields, fieldCount);
-    server.send(200, "text/json", json);
+    server->send(200, "text/json", json);
   });
 
-  server.on("/fieldValue", HTTP_GET, []() {
-    String name = server.arg("name");
+  server->on("/fieldValue", HTTP_GET, []() {
+    String name = server->arg("name");
 #ifdef DEBUG
     DEBUGPRNT("Called /fieldValue with arg name =");
     DEBUGPRNT(name);
 #endif
 
     String value = getFieldValue(name, fields, fieldCount);
-    server.send(200, "text/json", value);
+    server->send(200, "text/json", value);
   });
 
   //list directory
-  server.on("/list", HTTP_GET, handleFileList);
+  server->on("/list", HTTP_GET, handleFileList);
   //load editor
-  server.on("/edit", HTTP_GET, []() {
+  server->on("/edit", HTTP_GET, []() {
     if (!handleFileRead("/edit.htm"))
-      server.send(404, "text/plain", "FileNotFound");
+      server->send(404, "text/plain", "FileNotFound");
+  });
+
+  server->on("/testme", HTTP_GET, []() {
+    if(!handleFileRead("/index.htm"))
+      server->send(404, "text/plain", "FileNotFound");
   });
 
   //create file
-  server.on("/edit", HTTP_PUT, handleFileCreate);
+  server->on("/edit", HTTP_PUT, handleFileCreate);
   //delete file
-  server.on("/edit", HTTP_DELETE, handleFileDelete);
+  server->on("/edit", HTTP_DELETE, handleFileDelete);
   //first callback is called after the request has ended with all parsed arguments
   //second callback handles file uploads at that location
-  server.on("/edit", HTTP_POST, []() {
-    server.send(200, "text/plain", "");
+  server->on("/edit", HTTP_POST, []() {
+    server->send(200, "text/plain", "");
   },
             handleFileUpload);
 
-  server.on("/set", handleSet);
-  server.on("/getmodes", handleGetModes);
-  server.on("/getpals", handleGetPals);
-  server.on("/status", handleStatus);
-  server.on("/reset", handleResetRequest);
-  server.onNotFound(handleNotFound);
+  server->on("/set", handleSet);
+  server->on("/getmodes", handleGetModes);
+  server->on("/getpals", handleGetPals);
+  server->on("/status", handleStatus);
+  server->on("/reset", handleResetRequest);
+  server->onNotFound(handleNotFound);
 
-  server.serveStatic("/", SPIFFS, "/", "max-age=86400");
-  delay(INITDELAY);
-  server.begin();
+  server->serveStatic("/", SPIFFS, "/", "max-age=86400");
+  my_delay(INITDELAY);
+  server->begin();
 
   showInitColor(CRGB::Yellow);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
 #ifdef DEBUG
   DEBUGPRNT("HTTP server started.\n");
 #endif
@@ -2013,20 +2194,21 @@ void setupWebServer(void)
   webSocketsServer->onEvent(webSocketEvent);
 
   showInitColor(CRGB::Green);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
 #ifdef DEBUG
   DEBUGPRNT("webSocketServer started.\n");
 #endif
   showInitColor(CRGB::Black);
-  delay(INITDELAY);
+  my_delay(INITDELAY);
 }
 
 
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 {
+  DynamicJsonBuffer jsonBuffer(500);
   DEBUGPRNT("Checking the websocket event!");
-  server.arg(1);
+  server->arg(1);
   if(type == WStype_TEXT)
   {
     #ifdef DEBUG
@@ -2090,7 +2272,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 void setup()
 {
   // Sanity delay to get everything settled....
-  delay(500);
+  my_delay(500);
+
 
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
@@ -2100,6 +2283,8 @@ void setup()
 
   DEBUGPRNT("");
   DEBUGPRNT(F("Checking boot cause:"));
+
+  #ifdef ESP8266
 
   switch (getResetReason())
   {
@@ -2132,9 +2317,43 @@ void setup()
     DEBUGPRNT(F("\tUnknown cause..."));
     break;
   }
-
+  #endif
+  #ifdef ESP32
+  switch (getResetReason())
+  {
+  case ESP_RST_POWERON:
+    DEBUGPRNT(F("\tREASON_DEFAULT_RST: Normal boot"));
+    break;
+  case ESP_RST_WDT :
+  case ESP_RST_TASK_WDT :
+  case ESP_RST_INT_WDT:
+    DEBUGPRNT(F("\tREASON_WDT_RST"));
+    clearCRC(); // should enable default start in case of
+    break;
+  case ESP_RST_PANIC:
+    DEBUGPRNT(F("\tREASON_EXCEPTION_RST"));
+    clearCRC();
+    break;
+  case ESP_RST_SDIO:
+    DEBUGPRNT(F("\tREASON_SDIO"));
+    
+    break;
+  case ESP_RST_SW:
+    DEBUGPRNT(F("\tREASON_SOFT_RESTART"));
+    break;
+  case ESP_RST_DEEPSLEEP:
+    DEBUGPRNT(F("\tREASON_DEEP_SLEEP_AWAKE"));
+    break;
+  case ESP_RST_EXT:
+    DEBUGPRNT(F("\n\tREASON_EXT_SYS_RST: External trigger..."));
+    break;
+  case ESP_RST_UNKNOWN:
+  default:
+    DEBUGPRNT(F("\tUnknown cause..."));
+    break;
+  }
+  #endif
   
-
 
   stripe_setup(LED_COUNT,
                STRIP_FPS,
@@ -2147,6 +2366,8 @@ void setup()
   EEPROM.begin(strip->getSegmentSize());
 
   setupWiFi();
+
+  server = new WebServer(80);
 
   setupWebServer();
 
@@ -2163,10 +2384,10 @@ void setup()
         strip->leds[i].green = c;
       }
       strip->show();
-      delay(1);
+      my_delay(1);
     }
     DEBUGPRNT("Init done - fading green out");
-    delay(2);
+    my_delay(2);
     for (uint8_t c = 255; c > 0; c -= 3)
     {
       for (uint16_t i = 0; i < strip->getStripLength(); i++)
@@ -2174,11 +2395,11 @@ void setup()
         strip->leds[i].subtractFromRGB(4);
       }
       strip->show();
-      delay(1);
+      my_delay(1);
     }
   }
   //strip->stop();
-  delay(INITDELAY);
+  my_delay(INITDELAY);
 
   // Show the IP Address at the beginning
   // so one can take a picture. 
@@ -2216,7 +2437,7 @@ void setup()
   // internal LED can be light up when current is limited by FastLED
   pinMode(2, OUTPUT);
 
-  delay(7500);
+  my_delay(7500);
 
 
 #ifdef DEBUG
@@ -2313,6 +2534,7 @@ EVERY_N_MILLISECONDS(250)
 #ifdef DEBUG_PERFORMANCE
 EVERY_N_MILLIS(250)
 {
+  DynamicJsonBuffer jsonBuffer(200);
   JsonObject& toSend = jsonBuffer.createObject();
   toSend["name"] = F("infoBox");
   toSend["value"] = "\nCurrFPS: " + String(FastLED.getFPS()) +
@@ -2356,11 +2578,11 @@ EVERY_N_MILLIS(250)
       }
       strip->show();
       // Reset after 6 seconds....
-      delay(3000);
+      my_delay(3000);
 #ifdef DEBUG
       DEBUGPRNT("Resetting ESP....");
 #endif
-      delay(3000);
+      my_delay(3000);
       ESP.restart();
     }
     wifi_check_time = now + WIFI_TIMEOUT;
@@ -2370,7 +2592,7 @@ EVERY_N_MILLIS(250)
 
   webSocketsServer->loop();
 
-  server.handleClient();
+  server->handleClient();
 
   strip->service();
 

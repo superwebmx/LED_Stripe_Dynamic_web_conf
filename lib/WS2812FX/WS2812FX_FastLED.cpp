@@ -2636,7 +2636,7 @@ CRGB WS2812FX::makeDarker(const CRGB &color, fract8 howMuchDarker)
   return newcolor;
 }
 
-bool WS2812FX::getPixelDirection(uint16_t i, uint8 *directionFlags)
+bool WS2812FX::getPixelDirection(uint16_t i, uint8_t *directionFlags)
 {
   uint16_t index = i / 8;
   uint8_t bitNum = i & 0x07;
@@ -2645,7 +2645,7 @@ bool WS2812FX::getPixelDirection(uint16_t i, uint8 *directionFlags)
   return (directionFlags[index] & andMask) != 0;
 }
 
-void WS2812FX::setPixelDirection(uint16_t i, bool dir, uint8 *directionFlags)
+void WS2812FX::setPixelDirection(uint16_t i, bool dir, uint8_t *directionFlags)
 {
   uint16_t index = i / 8;
   uint8_t bitNum = i & 0x07;
